@@ -45,12 +45,12 @@ class VisionLanguageModel(nn.Module):
         images_tensors = self._process_images(images, input_ids.device)
         token_embd = self.decoder.token_embedding(input_ids)
         if images_tensors:
-            images_embd = self.vision_encoder(images_tensors)
-            images_embd = self.projector(images_embd)
-            token_embd = self._replace_img_tokens_with_embd(input_ids, token_embd, images_embd)
+            images_embd = self.vision_encoder(images_tensors) # [N_Chunks, T_feat, D_vit]
+            images_embd = self.projector(images_embd) # [N_Chunks, T_img, D_lm]
+            token_embd = self._replace_img_tokens_with_embd(input_ids, token_embd, images_embd) # [batch_size, seq_len, D_lm]
         
-        hidden_status, _ = self.decoder(token_embd, attention_mask=attention_mask)
-        logits = self.decoder.head(hidden_status)
+        hidden_status, _ = self.decoder(token_embd, attention_mask=attention_mask) # [batch_size, seq_len, D_lm]
+        logits = self.decoder.head(hidden_status) # [batch_size, seq_len, vocab_size]
         loss = None
         if target_ids:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=-100)
