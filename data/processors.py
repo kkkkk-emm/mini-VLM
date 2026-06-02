@@ -19,12 +19,12 @@ def get_tokenizer(tokenizer_name, extra_tokens, chat_template):
         TOKENIZER_CACHE[tokenizer_name] = tokenizer
     return TOKENIZER_CACHE[tokenizer_name]
 
-def get_image_processor(max_image_size, splitted_image_size, resize_to_max_side_len=None):
+def get_image_processor(max_image_size, splitted_image_size, resize_to_max_side_len=False):
     """
     获取图像处理器
     """
     return transforms.Compose([
-        DynamicResize(splitted_image_size, max_image_size, resize_to_max_side_len),
+        DynamicResize(splitted_image_size, max_image_size, resize_to_max_side_len), # [[N, 3, P, P]]
         transforms.ToTensor(),
         GlobalAndSplitImages(splitted_image_size)
     ])
@@ -34,7 +34,7 @@ def get_image_string(tokenizer, splitted_image_counts, mp_image_token_length):
     根据分割后的图像数量和每个图像的token长度生成图像字符串
     """
     image_strings = ""
-    for idx, (nh, nw) in splitted_image_counts:
+    for idx, (nh, nw) in enumerate(splitted_image_counts):
         if len(splitted_image_counts) > 1:
             image_strings += f"<image {idx}>"
         if hasattr(tokenizer, "global_image_token"):

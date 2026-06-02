@@ -20,12 +20,12 @@ class ModalityProjector(nn.Module):
 
     def pixel_shuffle(self, x):
         """
-        x: (bsz, token_num, hidden_dim)
-        压缩图片token的数量从而降低复杂度
+        x: (bsz, num_patches, hidden_dim)
+        压缩图片patches的数量从而降低复杂度
         """
-        bsz, token_num, hidden_dim = x.shape
-        h = w = int(token_num ** 0.5)
-        assert h * w == token_num
+        bsz, num_patches, hidden_dim = x.shape
+        h = w = int(num_patches ** 0.5)
+        assert h * w == num_patches
         x = x.view(bsz, h, w, hidden_dim)
         h_out = h // self.factor
         w_out = w // self.factor
@@ -35,13 +35,13 @@ class ModalityProjector(nn.Module):
         return x
 
     def forward(self, x):
-        x = self.pixel_shuffle(x) # (bsz, h' * w', hidden_dim * factor^2)
+        x = self.pixel_shuffle(x) # (bsz, h' * w', hidden_dim * factor**2)
         x = self.projector(x) # (bsz, h' * w', output_dim)
         return x
 
 if __name__ == "__main__":
     # (1, 1024, 768)
-    cfg = config.VLMConfig()
+    cfg = VLMConfig()
     projector = ModalityProjector(cfg)
     x = torch.randn(1, 1024, 768)
     output = projector(x)

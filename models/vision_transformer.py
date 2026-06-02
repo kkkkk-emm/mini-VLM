@@ -4,13 +4,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from config import VLMConfig
+
 class ViTPatchEmbedding(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.img_size = cfg.vit_img_size
         self.patch_size = cfg.vit_patch_size
         self.nums_patches = (cfg.vit_img_size // cfg.vit_patch_size) ** 2
-        self.embed_dim = cfg.vit_embed_dim
+        self.embed_dim = cfg.vit_hidden_dim
         self.cls_flag = cfg.vit_cls_flag
 
         self.conv = nn.Conv2d(
@@ -28,7 +30,7 @@ class ViTPatchEmbedding(nn.Module):
             self.position_embedding = nn.Parameter(torch.zeros(1, self.nums_patches, self.embed_dim))
 
     def forward(self, x):
-        x = self.conv(x) # [batch_size, embed_dim, nums_patches, nums_patches]
+        x = self.conv(x) # [batch_size, embed_dim, vit_img_size // vit_patch_size, vit_img_size // vit_patch_size]
         x = x.flatten(2).transpose(1, 2) # [batch_size, nums_patches, embed_dim]
 
         if self.cls_flag:
@@ -64,7 +66,7 @@ class ViTMultiHeadAttention(nn.Module):
         self.qkv = nn.Linear(self.embd_dim, 3 * self.embd_dim, bias=True)
         self.out = nn.Linear(self.embd_dim, self.embd_dim, bias=True)
         # dropout层
-        self.attn_dropout = nn.Dropout(cfg.vit_attn_dropout)
+        self.attn_dropout = nn.Dropout(cfg.vit_dropout)
         self.resid_dropout = nn.Dropout(cfg.vit_dropout)
 
         self.sdpa = hasattr(F, 'scaled_dot_product_attention')
@@ -97,22 +99,19 @@ class ViTMultiHeadAttention(nn.Module):
         x = self.resid_dropout(x)
         return x
 
-
 class ViTBlock(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.ln1 = nn.LayerNorm(cfg.vit_embed_dim, cfg.vit_ln_eps)
+        self.ln1 = nn.LayerNorm(cfg.vit_hidden_dim, cfg.vit_ln_eps)
         self.attn = ViTMultiHeadAttention(cfg)
-        self.ln2 = nn.LayerNorm(cfg.vit_embed_dim, cfg.vit_ln_eps)
+        self.ln2 = nn.LayerNorm(cfg.vit_hidden_dim, cfg.vit_ln_eps)
         self.mlp = ViTMLP(cfg)
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
-
-
 
 class ViT(nn.Module):
     def __init__(self, cfg):
@@ -121,7 +120,7 @@ class ViT(nn.Module):
         self.cls_flag = cfg.vit_cls_flag
         self.patch_embedding = ViTPatchEmbedding(cfg)
         self.dropout = nn.Dropout(cfg.vit_dropout)
-        self.blocks = nn.ModuleList([ViTBlock(cfg) for _ in range(cfg.vit_n_layers)])
+        self.blocks = nn.ModuleList([ViTBlock(cfg) for _ in range(cfg.vit_n_blocks)])
         self.norm = nn.LayerNorm(cfg.vit_hidden_dim, cfg.vit_ln_eps)
 
         self.apply(self._init_weights)
@@ -150,3 +149,10 @@ class ViT(nn.Module):
             x = self.norm(x) # [batch_size, nums_patches, embed_dim]
         return x
 
+if __name__ == "__main__":
+    # 测试ViT是否正常
+    cfg = VLMConfig()
+    vit = ViT(cfg)
+    x = torch.randn(2, 3, 512, 512)
+    output = vit(x)
+    print(output.shape)

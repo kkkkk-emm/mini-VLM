@@ -16,6 +16,7 @@ from safetensors.torch import load_model
 class VisionLanguageModel(nn.Module):
     def __init__(self, cfg: VLMConfig):
         super().__init__()
+        self.cfg = cfg
         self.vision_encoder = ViT(cfg)
         self.decoder = LanguageModel(cfg)
         self.projector = ModalityProjector(cfg)
@@ -44,31 +45,32 @@ class VisionLanguageModel(nn.Module):
     def forward(self, input_ids, images, attention_mask=None, target_ids=None):
         images_tensors = self._process_images(images, input_ids.device)
         token_embd = self.decoder.token_embedding(input_ids)
-        if images_tensors:
+        if images_tensors is not None:
             images_embd = self.vision_encoder(images_tensors) # [N_Chunks, T_feat, D_vit]
             images_embd = self.projector(images_embd) # [N_Chunks, T_img, D_lm]
             token_embd = self._replace_img_tokens_with_embd(input_ids, token_embd, images_embd) # [batch_size, seq_len, D_lm]
         
-        hidden_status, _ = self.decoder(token_embd, attention_mask=attention_mask) # [batch_size, seq_len, D_lm]
+        hidden_status, _, router_aux_loss = self.decoder(token_embd, attention_mask=attention_mask) # [batch_size, seq_len, D_lm]
         logits = self.decoder.head(hidden_status) # [batch_size, seq_len, vocab_size]
         loss = None
-        if target_ids:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=-100)
+        if target_ids is not None:
+            ce_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=-100)
+            loss = ce_loss + router_aux_loss
         return logits, loss
 
     @torch.inference_mode()
     def generate(self, input_ids, images, attention_mask=None, max_new_tokens=5, top_k=50, top_p=0.9, temperature=0.5, greedy=False):
         """
         input_ids: [batch_size, seq_len]
-        images: [N_Chunks, 3, height, width]
+        images: [B, 3, height, width]
         """
 
         # 处理图像
         images_tensor = self._process_images(images, input_ids.device)
-        token_embd = self.decoder.token_embedding(input_ids)
+        token_embd = self.decoder.token_embedding(input_ids) # [batch_size, seq_len, D_lm]
         if images_tensor is not None:
-            images_embd = self.vision_encoder(images_tensor) # [N_Chunks, T_feat, D_vit]
-            images_embd = self.projector(images_embd) # [N_Chunks, T_img, D_lm]
+            images_embd = self.vision_encoder(images_tensor) # [B, nums_patches, D_vit]
+            images_embd = self.projector(images_embd) # [B, mp_image_token_length, D_lm]
             token_embd = self._replace_img_tokens_with_embd(input_ids, token_embd, images_embd) # [batch_size, seq_len, D_lm]
         
         # 初始化自回归计算
@@ -76,10 +78,10 @@ class VisionLanguageModel(nn.Module):
         batch_size = token_embd.size(0)
         
         # prefill 计算
-        prefill_output, kv_cache_lise = self.decoder(
+        prefill_output, block_kv_cache, _ = self.decoder(
             token_embd,
             attention_mask=attention_mask,
-            kv_cache=None,
+            block_kv_cache=None,
             start_pos=0
         ) # prefill_output: [B, T_prefill, V_lm] if lm_use_tokens else [B, T_prefill, D_lm]
         last_token_from_prefill = prefill_output[:, -1, :]
@@ -101,16 +103,17 @@ class VisionLanguageModel(nn.Module):
             generated_token_embd = self.decoder.token_embedding(generated_token)
             
             current_total_sel_len += 1
-            if attention_mask:
+            if attention_mask is not None:
                 attention_mask = torch.cat([attention_mask, torch.ones((attention_mask.size(0), 1), dtype=attention_mask.dtype, device=attention_mask.device)], dim=1)
             
-            next_output, kv_cache_lise = self.decoder(
+            next_output, block_kv_cache, _ = self.decoder(
                 generated_token_embd,
                 attention_mask=attention_mask,
-                kv_cache=kv_cache_lise,
+                block_kv_cache=block_kv_cache,
                 start_pos=current_total_sel_len - 1
             )
-            if self.decoder.cfg.lm_use_tokens:
+            next_output = next_output[:, -1, :]
+            if self.decoder.lm_use_tokens:
                 currrent_logits = next_output # [B, V_lm]
             else:
                 currrent_logits = self.decoder.head(next_output) # [B, V_lm]
@@ -130,7 +133,7 @@ class VisionLanguageModel(nn.Module):
             min_for_row = masked_indexs.min(dim=1, keepdim=True).values # [B]
 
             indexs_new = torch.arange(seq_len, device=device) # [T_gen]
-            mask = (indexs_new > min_for_row.unsqueeze(0).expand_as(generated_token_list)) # [B, T_gen]
+            mask = (indexs_new.unsqueeze(0) > min_for_row) # [B, T_gen]
             generated_token_list = generated_token_list.masked_fill(mask, self.tokenizer.pad_token_id)
 
         return generated_token_list

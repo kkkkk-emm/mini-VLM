@@ -59,11 +59,11 @@ def main():
     resize_to_max_side_len = False
     if hasattr(model.cfg, "resize_to_max_side_len"):
         resize_to_max_side_len = model.cfg.resize_to_max_side_len
-    image_processor = get_image_processor(model.cfg.max_image_size, model.cfg.splitted_image_size, resize_to_max_side_len)
+    image_processor = get_image_processor(model.cfg.max_img_size, model.cfg.vit_img_size, resize_to_max_side_len)
     # 对图像进行处理
     image = Image.open(args.image).convert("RGB")
     processed_image, splitted_image_ratio = image_processor(image) # (N_num, 3, P, P), (nh, nw)
-    if not hasattr(tokenizer, "global_image_token"):
+    if not hasattr(tokenizer, "global_image_token") and splitted_image_ratio != (1, 1):
         processed_image = processed_image[1:]
     # 处理prompt
     image_string = get_image_string(tokenizer, [splitted_image_ratio], model.cfg.mp_image_token_length)
@@ -75,7 +75,7 @@ def main():
     print("\ninput: ", {args.prompt}, "\n output: ")
     for i in range(args.generations):
         gen = model.generate(tokens, img_t, max_new_tokens=args.max_new_tokens) # [1, L]
-        out = tokenizer.decode(gen, skip_special_tokens=True)[0]
+        out = tokenizer.batch_decode(gen, skip_special_tokens=True)[0]
         if args.measure_vram and torch.cuda.is_available():
             torch.cuda.synchronize()
             max_vram_usage = torch.cuda.max_memory_allocated(device)

@@ -30,6 +30,12 @@ class VLMConfig:
     lm_max_length: int = 4096
     lm_use_tokens: bool = False # Decide if the LM expects tokens or embeddings as input (if using as a backbone for the VLM, set to False)
     lm_tie_weights: bool = True # Decide if you want to tie the LM Head weight to the token embedding weights
+    lm_use_moe: bool = False
+    lm_num_experts: int = 8
+    lm_num_experts_per_tok: int = 2
+    lm_moe_inter_dim: int = 1280
+    lm_norm_topk_prob: bool = True
+    lm_router_aux_loss_coef: float = 0.01
     lm_model_type: str = 'HuggingFaceTB/SmolLM2-360M-Instruct' #'HuggingFaceTB/SmolLM2-135M' #
     lm_tokenizer: str = 'HuggingFaceTB/SmolLM2-360M-Instruct'
     lm_chat_template: str = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
@@ -52,6 +58,10 @@ class VLMConfig:
     vlm_load_backbone_weights: bool = True
     vlm_checkpoint_path: str = 'checkpoints'
     hf_repo_name: str = 'nanoVLM'
+
+    def __post_init__(self):
+        if not 1 <= self.lm_num_experts_per_tok <= self.lm_num_experts:
+            raise ValueError("lm_num_experts_per_tok must be between 1 and lm_num_experts")
 
 
 @dataclass

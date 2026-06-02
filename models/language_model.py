@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+from config import VLMConfig
+
 class RMSNorm(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -67,7 +69,7 @@ class LanguageModelGroupQueryAttention(nn.Module):
         super().__init__()
         self.n_heads = cfg.lm_n_heads
         self.embd_dim = cfg.lm_hidden_dim
-        self.n_kv_heads = cfg.n_kv_heads
+        self.n_kv_heads = cfg.lm_n_kv_heads
         self.dropout = cfg.lm_dropout
         assert self.n_heads % self.n_kv_heads == 0, "n_heads must be divisible by n_kv_heads"
         assert self.embd_dim % self.n_heads == 0, "embd_dim must be divisible by n_heads"
@@ -113,7 +115,7 @@ class LanguageModelGroupQueryAttention(nn.Module):
         seq_len_total = k.size(-2)
 
         additive_attn_mask = None # 用来屏蔽无意义的token，比如padding
-        if attention_mask:
+        if attention_mask is not None:
             mask = attention_mask[..., :seq_len_total] # 只取前seq_len_total个元素
             mask = mask.unsqueeze(1).unsqueeze(2).float()  # [bsz, 1, 1, seq_len_total]
             additive_attn_mask = (1.0 - mask) * torch.finfo(q.dtype).min # 将掩码转换为负无穷
@@ -132,7 +134,7 @@ class LanguageModelGroupQueryAttention(nn.Module):
                 casual_mask = torch.tril(torch.ones(seq_len_total, seq_len_total, dtype=torch.bool, device=x.device))
                 attn = attn.masked_fill(casual_mask == 0, float('-inf'))
 
-            if additive_attn_mask:
+            if additive_attn_mask is not None:
                 attn = attn + additive_attn_mask # 屏蔽无意义token
             
             attn = F.softmax(attn, dim=-1)
@@ -145,10 +147,11 @@ class LanguageModelGroupQueryAttention(nn.Module):
         return output, block_kv_cache
 
 class LanguageModelMLP(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, inter_dim: int = None):
+        super().__init__()
         self.embd_dim = cfg.lm_hidden_dim
-        self.inter_dim = cfg.lm_inter_dim
-        
+        self.inter_dim = inter_dim or cfg.lm_inter_dim
+
         self.activate_fn = F.silu
         self.gate_proj = nn.Linear(self.embd_dim, self.inter_dim, bias=False)
         self.up_proj = nn.Linear(self.embd_dim, self.inter_dim, bias=False)
@@ -160,30 +163,87 @@ class LanguageModelMLP(nn.Module):
         fuse = gate * up
         return self.down_proj(fuse)
 
+class LanguageModelMoE(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.config = cfg
+        self.num_experts = cfg.lm_num_experts
+        self.gate = nn.Linear(cfg.lm_hidden_dim, self.num_experts, bias=False)
+        self.experts = nn.ModuleList([LanguageModelMLP(cfg, cfg.lm_moe_inter_dim) for _ in range(self.num_experts)])
+
+    def forward(self, x, attention_mask=None):
+        bsz, seq_len, hidden_dim = x.shape
+        x_flat = x.reshape(-1, hidden_dim)
+        gate_logits = self.gate(x_flat)
+        scores = F.softmax(gate_logits, dim=-1)
+        top_k_weight, top_k_indices = torch.topk(scores, self.config.lm_num_experts_per_tok, dim=-1)
+        if self.config.lm_norm_topk_prob:
+            top_k_weight = top_k_weight / (top_k_weight.sum(dim=-1, keepdim=True) + 1e-20)
+
+        y = torch.zeros_like(x_flat)
+        unused_expert_sum = None
+        for i, expert in enumerate(self.experts):
+            token_idx, top_k_slot = torch.where(top_k_indices == i)
+            if token_idx.numel() > 0:
+                weight = top_k_weight[token_idx, top_k_slot].unsqueeze(-1)
+                y.index_add_(0, token_idx, (expert(x_flat[token_idx]) * weight).to(y.dtype))
+            elif self.training:
+                expert_sum = sum(p.sum() for p in expert.parameters())
+                unused_expert_sum = expert_sum if unused_expert_sum is None else unused_expert_sum + expert_sum
+
+        if unused_expert_sum is not None:
+            y = y + 0.0 * unused_expert_sum
+
+        if self.training:
+            if attention_mask is not None:
+                valid_token_mask = attention_mask[..., -seq_len:].reshape(-1).bool()
+                valid_scores = scores[valid_token_mask]
+                valid_top_k_indices = top_k_indices[valid_token_mask]
+            else:
+                valid_scores = scores
+                valid_top_k_indices = top_k_indices
+
+            if valid_scores.numel() > 0:
+                load = F.one_hot(valid_top_k_indices, num_classes=self.num_experts).float().mean(dim=(0, 1))
+                aux_loss = (load * valid_scores.mean(dim=0)).sum() * self.num_experts
+            else:
+                aux_loss = scores.new_zeros(())
+        else:
+            aux_loss = scores.new_zeros(())
+
+        return y.view(bsz, seq_len, hidden_dim), aux_loss
+
+
 class LanguageModelBlock(nn.Module):
     def __init__(self, cfg) -> None:
         super().__init__()
         self.attn = LanguageModelGroupQueryAttention(cfg)
-        self.mlp = LanguageModelMLP(cfg)
-        self.norm1 = RMSNorm(cfg.lm_hidden_dim)
-        self.norm2 = RMSNorm(cfg.lm_hidden_dim)
+        self.use_moe = cfg.lm_use_moe
+        self.mlp = LanguageModelMoE(cfg) if cfg.lm_use_moe else LanguageModelMLP(cfg)
+        self.norm1 = RMSNorm(cfg)
+        self.norm2 = RMSNorm(cfg)
 
     def forward(self, x, cos, sin, attention_mask=None, block_kv_cache=None):
         x = self.norm1(x) # [B, S, D]
         attn_out, block_kv_cache = self.attn(x, cos, sin, attention_mask, block_kv_cache)
         x = x + attn_out
         res = self.norm2(x)
-        mlp_out = self.mlp(res)
+        if self.use_moe:
+            mlp_out, router_aux_loss = self.mlp(res, attention_mask=attention_mask)
+        else:
+            mlp_out = self.mlp(res)
+            router_aux_loss = res.new_zeros(())
         x = x + mlp_out
-        return x, block_kv_cache
+        return x, block_kv_cache, router_aux_loss
 
 class LanguageModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.lm_use_tokens = cfg.lm_use_tokens # 判断是否传入的是token而非embedding
         self.lm_tie_weights = cfg.lm_tie_weights # 判断是否需要Embedding和head共用权重
-        self.blocks = nn.ModuleList([LanguageModelBlock(cfg) for _ in range(cfg.lm_n_layers)])
-        self.norm = RMSNorm(cfg.lm_hidden_dim)
+        self.lm_router_aux_loss_coef = cfg.lm_router_aux_loss_coef
+        self.blocks = nn.ModuleList([LanguageModelBlock(cfg) for _ in range(cfg.lm_n_blocks)])
+        self.norm = RMSNorm(cfg)
         self.token_embedding = nn.Embedding(cfg.lm_vocab_size, cfg.lm_hidden_dim)
         self.rotary_embd = RotaryEmbedding(cfg)
         self.head = nn.Linear(cfg.lm_hidden_dim, cfg.lm_vocab_size, bias=False)
@@ -208,14 +268,25 @@ class LanguageModel(nn.Module):
         
         bsz, seq_len, _ = x.shape
         freqs = torch.arange(start=start_pos, end=start_pos + seq_len, device=x.device).unsqueeze(0).expand(bsz, seq_len) # [B, S]
-        cos, sin = self.rotary_embd.get_cos_sin(freqs) # [B, S, D_rotary]
+        cos, sin = self.rotary_embd(freqs) # [B, S, D_rotary]
 
         if block_kv_cache is None:
             block_kv_cache = [None] * len(self.blocks)
 
+        router_aux_losses = []
         for i, block in enumerate(self.blocks):
-            x, block_kv_cache[i] = block(x, cos, sin, attention_mask, block_kv_cache[i])
+            x, block_kv_cache[i], router_aux_loss = block(x, cos, sin, attention_mask, block_kv_cache[i])
+            router_aux_losses.append(router_aux_loss)
         x = self.norm(x)
         if self.lm_use_tokens:
             x = self.head(x) # [B, S, V]
-        return x, block_kv_cache
+        router_aux_loss = torch.stack(router_aux_losses).mean() * self.lm_router_aux_loss_coef
+        return x, block_kv_cache, router_aux_loss
+
+if __name__ == "__main__":
+    # 测试decoder
+    cfg = VLMConfig()
+    decoder = LanguageModel(cfg)
+    x = torch.randn(2, 10, cfg.lm_hidden_dim)
+    output = decoder(x)
+    print(output[0].shape)
