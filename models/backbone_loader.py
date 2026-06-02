@@ -17,17 +17,17 @@ def _copy_vision_weights(vision_encoder, state_dict):
     patch_embedding = vision_encoder.patch_embedding
     _copy_parameter(
         patch_embedding.conv.weight,
-        state_dict["vision_model.embeddings.patch_embedding.weight"],
+        state_dict["embeddings.patch_embedding.weight"],
     )
     _copy_parameter(
         patch_embedding.conv.bias,
-        state_dict["vision_model.embeddings.patch_embedding.bias"],
+        state_dict["embeddings.patch_embedding.bias"],
     )
-    position_embedding = state_dict["vision_model.embeddings.position_embedding.weight"]
+    position_embedding = state_dict["embeddings.position_embedding.weight"]
     _copy_parameter(patch_embedding.position_embedding, position_embedding.unsqueeze(0))
 
     for index, block in enumerate(vision_encoder.blocks):
-        prefix = f"vision_model.encoder.layers.{index}"
+        prefix = f"encoder.layers.{index}"
         _copy_parameter(block.ln1.weight, state_dict[f"{prefix}.layer_norm1.weight"])
         _copy_parameter(block.ln1.bias, state_dict[f"{prefix}.layer_norm1.bias"])
         _copy_parameter(
@@ -61,8 +61,8 @@ def _copy_vision_weights(vision_encoder, state_dict):
         _copy_parameter(block.mlp.fc2.weight, state_dict[f"{prefix}.mlp.fc2.weight"])
         _copy_parameter(block.mlp.fc2.bias, state_dict[f"{prefix}.mlp.fc2.bias"])
 
-    _copy_parameter(vision_encoder.norm.weight, state_dict["vision_model.post_layernorm.weight"])
-    _copy_parameter(vision_encoder.norm.bias, state_dict["vision_model.post_layernorm.bias"])
+    _copy_parameter(vision_encoder.norm.weight, state_dict["post_layernorm.weight"])
+    _copy_parameter(vision_encoder.norm.bias, state_dict["post_layernorm.bias"])
 
 
 @torch.no_grad()
