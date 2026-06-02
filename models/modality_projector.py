@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 
-from config import VLMConfig
+try:
+    from .config import VLMConfig
+except ImportError:
+    from config import VLMConfig
 
 class ModalityProjector(nn.Module):
     def __init__(self, cfg: VLMConfig):

@@ -1,4 +1,3 @@
-from tkinter import NO
 import os
 import json
 import torch 
@@ -6,21 +5,31 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 from models.utils import top_k_top_p_filtering
-from config import VLMConfig
-from language_model import LanguageModel
-from vision_transformer import ViT
-from modality_projector import ModalityProjector
+try:
+    from .backbone_loader import load_hf_backbones
+    from .config import VLMConfig
+    from .language_model import LanguageModel
+    from .vision_transformer import ViT
+    from .modality_projector import ModalityProjector
+except ImportError:
+    from backbone_loader import load_hf_backbones
+    from config import VLMConfig
+    from language_model import LanguageModel
+    from vision_transformer import ViT
+    from modality_projector import ModalityProjector
 from data.processors import get_tokenizer
 from safetensors.torch import load_model
 
 class VisionLanguageModel(nn.Module):
-    def __init__(self, cfg: VLMConfig):
+    def __init__(self, cfg: VLMConfig, tokenizer_path: Optional[str] = None):
         super().__init__()
         self.cfg = cfg
+        tokenizer_source = tokenizer_path or cfg.lm_tokenizer
+        self.tokenizer = get_tokenizer(tokenizer_source, cfg.vlm_extra_tokens, cfg.lm_chat_template)
+        cfg.lm_vocab_size = len(self.tokenizer)
         self.vision_encoder = ViT(cfg)
         self.decoder = LanguageModel(cfg)
         self.projector = ModalityProjector(cfg)
-        self.tokenizer = get_tokenizer(cfg.lm_tokenizer, cfg.vlm_extra_tokens, cfg.lm_chat_template)
 
     def _process_images(self, images, device):
         if isinstance(images, list):
@@ -166,7 +175,15 @@ class VisionLanguageModel(nn.Module):
         with open(config_path, "r") as f:
             config = VLMConfig(**json.load(f))
 
-        model = cls(config)
+        tokenizer_path = repo if os.path.exists(repo) else None
+        model = cls(config, tokenizer_path=tokenizer_path)
         load_model(model, weight_path)
 
+        return model
+
+    @classmethod
+    def from_hf_backbones(cls, cfg: VLMConfig):
+        model = cls(cfg)
+        if cfg.vlm_load_backbone_weights:
+            load_hf_backbones(model)
         return model

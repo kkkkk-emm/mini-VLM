@@ -55,7 +55,7 @@ def main():
         vram_usage = torch.cuda.max_memory_allocated()
         print(f"VRAM usage: {vram_usage / (1024 ** 2):.2f} MB")
     # 获取tokenizer和图形处理器
-    tokenizer = get_tokenizer(model.cfg.lm_tokenizer, model.cfg.vlm_extra_tokens, model.cfg.lm_chat_template)
+    tokenizer = model.tokenizer
     resize_to_max_side_len = False
     if hasattr(model.cfg, "resize_to_max_side_len"):
         resize_to_max_side_len = model.cfg.resize_to_max_side_len

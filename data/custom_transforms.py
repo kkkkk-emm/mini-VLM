@@ -74,5 +74,7 @@ class GlobalAndSplitImages(nn.Module):
         if grid == (1, 1):
             return patchs, grid
         global_patch = resize(x, [self.patch_size, self.patch_size])
+        if global_patch.ndim == 3:
+            global_patch = global_patch.unsqueeze(0)
         return torch.cat([global_patch, patchs], dim=0), grid
         

@@ -1,11 +1,12 @@
-from turtle import forward
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from config import VLMConfig
+try:
+    from .config import VLMConfig
+except ImportError:
+    from config import VLMConfig
 
 class RMSNorm(nn.Module):
     def __init__(self, cfg):

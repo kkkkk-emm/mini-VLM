@@ -9,15 +9,16 @@ def get_tokenizer(tokenizer_name, extra_tokens, chat_template):
     """
     获取tokenizer,并且缓存以提高性能
     """
-    if tokenizer_name not in TOKENIZER_CACHE:
+    cache_key = (tokenizer_name, tuple((extra_tokens or {}).items()), chat_template)
+    if cache_key not in TOKENIZER_CACHE:
         tokenizer_args = {"use_fast": True}
         if extra_tokens:
             tokenizer_args["additional_special_tokens"] = extra_tokens
         if chat_template:
             tokenizer_args["chat_template"] = chat_template
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, **tokenizer_args)
-        TOKENIZER_CACHE[tokenizer_name] = tokenizer
-    return TOKENIZER_CACHE[tokenizer_name]
+        TOKENIZER_CACHE[cache_key] = tokenizer
+    return TOKENIZER_CACHE[cache_key]
 
 def get_image_processor(max_image_size, splitted_image_size, resize_to_max_side_len=False):
     """
