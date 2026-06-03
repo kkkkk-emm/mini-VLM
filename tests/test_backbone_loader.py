@@ -1,4 +1,6 @@
+import importlib.util
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -6,6 +8,20 @@ from models.backbone_loader import _copy_language_weights, _copy_vision_weights
 from models.config import VLMConfig
 from models.language_model import LanguageModel, LanguageModelMoE
 from models.vision_transformer import ViT
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SIGLIP_PATH = ROOT / "google" / "siglip2-base-patch16-512"
+SMOLLM_PATH = ROOT / "HuggingFaceTB" / "SmolLM2-360M-Instruct"
+
+
+def local_backbones_available():
+    return (
+        (SIGLIP_PATH / "config.json").is_file()
+        and (SIGLIP_PATH / "model.safetensors").is_file()
+        and (SMOLLM_PATH / "config.json").is_file()
+        and (SMOLLM_PATH / "model.safetensors").is_file()
+    )
 
 
 class BackboneLoaderTests(unittest.TestCase):
@@ -107,6 +123,50 @@ class BackboneLoaderTests(unittest.TestCase):
             "model.layers.0.mlp.down_proj.weight": torch.ones(4, 8),
             "model.norm.weight": torch.ones_like(decoder.norm.weight),
         }
+
+
+@unittest.skipUnless(importlib.util.find_spec("transformers"), "transformers is not installed")
+@unittest.skipUnless(local_backbones_available(), "local backbone snapshots are not available")
+class BackboneAlignmentIntegrationTests(unittest.TestCase):
+    def test_siglip_vision_hidden_states_match_transformers(self):
+        from transformers import SiglipVisionModel
+
+        torch.manual_seed(0)
+        cfg = VLMConfig()
+        custom = ViT(cfg).eval()
+        official = SiglipVisionModel.from_pretrained(str(SIGLIP_PATH)).eval()
+        _copy_vision_weights(custom, official.state_dict())
+
+        pixel_values = torch.randn(1, 3, cfg.vit_img_size, cfg.vit_img_size)
+        with torch.no_grad():
+            actual = custom(pixel_values)
+            expected = official(pixel_values=pixel_values).last_hidden_state
+
+        max_diff = (actual - expected).abs().max().item()
+        self.assertTrue(
+            torch.allclose(actual, expected, atol=1e-4, rtol=1e-4),
+            f"max diff: {max_diff}",
+        )
+
+    def test_smollm_logits_match_transformers(self):
+        from transformers import AutoModelForCausalLM
+
+        cfg = VLMConfig(lm_use_tokens=True)
+        cfg.lm_vocab_size = cfg.lm_base_vocab_size
+        custom = LanguageModel(cfg).eval()
+        official = AutoModelForCausalLM.from_pretrained(str(SMOLLM_PATH)).eval()
+        _copy_language_weights(custom, official.state_dict(), base_vocab_size=cfg.lm_base_vocab_size)
+
+        input_ids = torch.tensor([[1, 42, 2]])
+        with torch.no_grad():
+            actual, _, _ = custom(input_ids)
+            expected = official(input_ids=input_ids).logits
+
+        max_diff = (actual - expected).abs().max().item()
+        self.assertTrue(
+            torch.allclose(actual, expected, atol=5e-3, rtol=5e-3),
+            f"max diff: {max_diff}",
+        )
 
 
 if __name__ == "__main__":

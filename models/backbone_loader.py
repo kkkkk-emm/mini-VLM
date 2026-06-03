@@ -14,20 +14,27 @@ def _copy_parameter(target, source):
 
 @torch.no_grad()
 def _copy_vision_weights(vision_encoder, state_dict):
+    if "embeddings.patch_embedding.weight" in state_dict:
+        key_prefix = ""
+    elif "vision_model.embeddings.patch_embedding.weight" in state_dict:
+        key_prefix = "vision_model."
+    else:
+        raise KeyError("Could not find SigLIP vision weights in state_dict")
+
     patch_embedding = vision_encoder.patch_embedding
     _copy_parameter(
         patch_embedding.conv.weight,
-        state_dict["embeddings.patch_embedding.weight"],
+        state_dict[f"{key_prefix}embeddings.patch_embedding.weight"],
     )
     _copy_parameter(
         patch_embedding.conv.bias,
-        state_dict["embeddings.patch_embedding.bias"],
+        state_dict[f"{key_prefix}embeddings.patch_embedding.bias"],
     )
-    position_embedding = state_dict["embeddings.position_embedding.weight"]
+    position_embedding = state_dict[f"{key_prefix}embeddings.position_embedding.weight"]
     _copy_parameter(patch_embedding.position_embedding, position_embedding.unsqueeze(0))
 
     for index, block in enumerate(vision_encoder.blocks):
-        prefix = f"encoder.layers.{index}"
+        prefix = f"{key_prefix}encoder.layers.{index}"
         _copy_parameter(block.ln1.weight, state_dict[f"{prefix}.layer_norm1.weight"])
         _copy_parameter(block.ln1.bias, state_dict[f"{prefix}.layer_norm1.bias"])
         _copy_parameter(
@@ -61,8 +68,8 @@ def _copy_vision_weights(vision_encoder, state_dict):
         _copy_parameter(block.mlp.fc2.weight, state_dict[f"{prefix}.mlp.fc2.weight"])
         _copy_parameter(block.mlp.fc2.bias, state_dict[f"{prefix}.mlp.fc2.bias"])
 
-    _copy_parameter(vision_encoder.norm.weight, state_dict["post_layernorm.weight"])
-    _copy_parameter(vision_encoder.norm.bias, state_dict["post_layernorm.bias"])
+    _copy_parameter(vision_encoder.norm.weight, state_dict[f"{key_prefix}post_layernorm.weight"])
+    _copy_parameter(vision_encoder.norm.bias, state_dict[f"{key_prefix}post_layernorm.bias"])
 
 
 @torch.no_grad()

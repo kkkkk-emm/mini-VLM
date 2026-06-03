@@ -15,8 +15,10 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(cfg.lm_hidden_dim))
 
     def forward(self, x):
+        input_dtype = x.dtype
+        x = x.to(torch.float32)
         x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * self.weight
+        return self.weight * x.to(input_dtype)
 
 class RotaryEmbedding(nn.Module):
     def __init__(self, cfg):
@@ -34,13 +36,7 @@ class RotaryEmbedding(nn.Module):
         position_ids:[batch_size, seq_len]
         """
         bsz, seq_len = position_ids.shape
-        max_len_in_pos = position_ids.max() + 1
-        # 使用动态缩放
-        if max_len_in_pos > self.max_seq_len:
-            scaling = self.max_seq_len / max_len_in_pos
-            inv_freq = self.inv_freq * scaling # [D // 2]
-        else:
-            inv_freq = self.inv_freq # [D // 2]
+        inv_freq = self.inv_freq # [D // 2]
         
         flat_position_ids = position_ids.reshape(-1).float() # [B * seq_len]
         freqs = flat_position_ids.unsqueeze(-1) * inv_freq.unsqueeze(0) # [B * seq_len, D // 2]

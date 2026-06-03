@@ -31,6 +31,9 @@ class MoESourceContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             VLMConfig(lm_num_experts=2, lm_num_experts_per_tok=3)
 
+    def test_default_chat_template_defers_to_smollm_tokenizer(self):
+        self.assertIsNone(VLMConfig().lm_chat_template)
+
     def test_decoder_selects_moe_and_returns_auxiliary_loss(self):
         source = read_text("models/language_model.py")
 

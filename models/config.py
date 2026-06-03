@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -38,7 +39,7 @@ class VLMConfig:
     lm_router_aux_loss_coef: float = 0.01
     lm_model_type: str = 'HuggingFaceTB/SmolLM2-360M-Instruct' #'HuggingFaceTB/SmolLM2-135M' #
     lm_tokenizer: str = 'HuggingFaceTB/SmolLM2-360M-Instruct'
-    lm_chat_template: str = "{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+    lm_chat_template: Optional[str] = None
 
     mp_pixel_shuffle_factor: int = 4
     mp_image_token_length: int = 64
