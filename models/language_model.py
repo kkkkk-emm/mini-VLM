@@ -225,16 +225,16 @@ class LanguageModelBlock(nn.Module):
         self.norm2 = RMSNorm(cfg)
 
     def forward(self, x, cos, sin, attention_mask=None, block_kv_cache=None):
-        x = self.norm1(x) # [B, S, D]
-        attn_out, block_kv_cache = self.attn(x, cos, sin, attention_mask, block_kv_cache)
-        x = x + attn_out
-        res = self.norm2(x)
+        residual = x # [B, S, D]
+        attn_out, block_kv_cache = self.attn(self.norm1(x), cos, sin, attention_mask, block_kv_cache)
+        x = residual + attn_out
+        residual = x
         if self.use_moe:
-            mlp_out, router_aux_loss = self.mlp(res, attention_mask=attention_mask)
+            mlp_out, router_aux_loss = self.mlp(self.norm2(x), attention_mask=attention_mask)
         else:
-            mlp_out = self.mlp(res)
-            router_aux_loss = res.new_zeros(())
-        x = x + mlp_out
+            mlp_out = self.mlp(self.norm2(x))
+            router_aux_loss = x.new_zeros(())
+        x = residual + mlp_out
         return x, block_kv_cache, router_aux_loss
 
 class LanguageModel(nn.Module):

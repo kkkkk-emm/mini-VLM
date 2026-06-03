@@ -87,7 +87,7 @@ class TrainConfig:
     seed: int = 42
     weight_decay: float = 0.01
     warmup_ratio: float = 0.03
-    checkpoint_interval: int = 1000
+    checkpoint_interval: int = 500
     checkpoint_keep_latest: int = 3
     checkpoint_path: str = "checkpoints"
     max_eval_batches: int = 100
