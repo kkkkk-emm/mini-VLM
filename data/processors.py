@@ -1,4 +1,3 @@
-from transformers import AutoTokenizer
 from torchvision.transforms import transforms
 
 from data.custom_transforms import DynamicResize, GlobalAndSplitImages
@@ -11,6 +10,8 @@ def get_tokenizer(tokenizer_name, extra_tokens, chat_template):
     """
     cache_key = (tokenizer_name, tuple((extra_tokens or {}).items()), chat_template)
     if cache_key not in TOKENIZER_CACHE:
+        from transformers import AutoTokenizer
+
         tokenizer_args = {"use_fast": True}
         if extra_tokens:
             tokenizer_args["extra_special_tokens"] = extra_tokens
@@ -27,6 +28,7 @@ def get_image_processor(max_image_size, splitted_image_size, resize_to_max_side_
     return transforms.Compose([
         DynamicResize(splitted_image_size, max_image_size, resize_to_max_side_len), # [[N, 3, P, P]]
         transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         GlobalAndSplitImages(splitted_image_size)
     ])
 

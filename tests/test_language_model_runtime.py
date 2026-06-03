@@ -17,11 +17,18 @@ class LanguageModelRuntimeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         global torch, nn, VLMConfig, LanguageModel, LanguageModelMLP, LanguageModelMoE
+        global RMSNorm, RotaryEmbedding
 
         import torch
         import torch.nn as nn
         from config import VLMConfig
-        from language_model import LanguageModel, LanguageModelMLP, LanguageModelMoE
+        from language_model import (
+            LanguageModel,
+            LanguageModelMLP,
+            LanguageModelMoE,
+            RMSNorm,
+            RotaryEmbedding,
+        )
 
     def tiny_config(self, **overrides):
         values = {
@@ -121,6 +128,32 @@ class LanguageModelRuntimeTests(unittest.TestCase):
 
         for expert in moe.experts:
             self.assertTrue(all(parameter.grad is not None for parameter in expert.parameters()))
+
+    def test_rms_norm_computes_variance_in_float32(self):
+        norm = RMSNorm(self.tiny_config(lm_hidden_dim=2))
+        x = torch.tensor([[[256.0, 1.0]]], dtype=torch.float16)
+
+        output = norm(x)
+
+        self.assertGreater(output[0, 0, 0].abs().item(), 1.0)
+
+    def test_rotary_embedding_uses_unscaled_positions_past_max_length(self):
+        cfg = self.tiny_config(
+            lm_hidden_dim=4,
+            lm_n_heads=1,
+            lm_max_position_embeddings=4,
+            lm_re_base=10000,
+        )
+        rotary = RotaryEmbedding(cfg)
+        position_ids = torch.tensor([[8]])
+
+        cos, sin = rotary(position_ids)
+
+        inv_freq = 1.0 / (cfg.lm_re_base ** (torch.arange(0, 4, 2).float() / 4))
+        freqs = position_ids.float().unsqueeze(-1) * inv_freq
+        expected = torch.cat([freqs, freqs], dim=-1)
+        self.assertTrue(torch.allclose(cos, torch.cos(expected)))
+        self.assertTrue(torch.allclose(sin, torch.sin(expected)))
 
     def test_invalid_top_k_is_rejected(self):
         with self.assertRaises(ValueError):
