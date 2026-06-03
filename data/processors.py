@@ -13,7 +13,7 @@ def get_tokenizer(tokenizer_name, extra_tokens, chat_template):
     if cache_key not in TOKENIZER_CACHE:
         tokenizer_args = {"use_fast": True}
         if extra_tokens:
-            tokenizer_args["additional_special_tokens"] = extra_tokens
+            tokenizer_args["extra_special_tokens"] = extra_tokens
         if chat_template:
             tokenizer_args["chat_template"] = chat_template
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, **tokenizer_args)
@@ -46,6 +46,6 @@ def get_image_string(tokenizer, splitted_image_counts, mp_image_token_length):
                 continue
         for i in range(nh):
             for j in range(nw):
-                image_strings += f"<image c{i + 1}r{j + 1}>"
+                image_strings += getattr(tokenizer, f"r{i + 1}c{j + 1}")
                 image_strings += tokenizer.image_token * mp_image_token_length
     return image_strings

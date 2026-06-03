@@ -57,7 +57,7 @@ class VLMConfig:
       "r8c1": "<row_8_col_1>", "r8c2": "<row_8_col_2>", "r8c3": "<row_8_col_3>", "r8c4": "<row_8_col_4>", "r8c5": "<row_8_col_5>", "r8c6": "<row_8_col_6>", "r8c7": "<row_8_col_7>", "r8c8": "<row_8_col_8>"})
     vlm_load_backbone_weights: bool = True
     vlm_checkpoint_path: str = 'checkpoints'
-    hf_repo_name: str = 'nanoVLM'
+    hf_repo_name: str = 'mini-VLM'
 
     def __post_init__(self):
         if not 1 <= self.lm_num_experts_per_tok <= self.lm_num_experts:
