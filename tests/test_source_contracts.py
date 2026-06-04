@@ -2,6 +2,15 @@ import unittest
 from pathlib import Path
 import sys
 
+from evaluate import (
+    build_prompt,
+    parse_choice,
+    parse_pope_answer,
+    parse_yes_no,
+    resolve_dataset_files,
+    summarize_records,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = ROOT / "models"
@@ -72,6 +81,92 @@ class MoESourceContractTests(unittest.TestCase):
         self.assertIn("for idx, (nh, nw) in enumerate(splitted_image_counts):", processors_source)
         self.assertIn("tokenizer.batch_decode(", generate_source)
         self.assertIn("splitted_image_ratio != (1, 1)", generate_source)
+
+
+class EvaluationAdapterTests(unittest.TestCase):
+    def test_script_is_renamed_to_generic_evaluate_entrypoint(self):
+        self.assertTrue((ROOT / "evaluate.py").is_file())
+        self.assertFalse((ROOT / "evaluate_mmstar.py").exists())
+
+    def test_default_dataset_paths_resolve_downloaded_benchmarks(self):
+        self.assertEqual(len(resolve_dataset_files("mmstar")), 1)
+        self.assertEqual(len(resolve_dataset_files("mme")), 4)
+        self.assertEqual(len(resolve_dataset_files("pope")), 3)
+        self.assertEqual(len(resolve_dataset_files("mme", "data/MME")), 4)
+        self.assertEqual(len(resolve_dataset_files("pope", "data/POPE")), 3)
+
+    def test_benchmark_answer_parsers(self):
+        self.assertEqual(parse_choice("The answer is C."), "C")
+        self.assertEqual(parse_choice("(A)"), "A")
+        self.assertEqual(parse_choice("I think C because..."), "")
+        self.assertEqual(parse_yes_no("Yes."), "yes")
+        self.assertEqual(parse_yes_no("No, there is not."), "no")
+        self.assertEqual(parse_yes_no("The answer is yes"), "")
+        self.assertEqual(parse_pope_answer("There is not a dog. It may be a cat."), "no")
+        self.assertEqual(parse_pope_answer("Maybe"), "yes")
+
+    def test_prompts_match_benchmark_answer_type(self):
+        self.assertIn("A, B, C, or D", build_prompt("mmstar", "Question", "strict"))
+        self.assertIn("exactly Yes or No", build_prompt("mme", "Question", "strict"))
+        self.assertIn("exactly Yes or No", build_prompt("pope", "Question", "strict"))
+
+    def test_mmstar_summary_reports_accuracy_and_diagnostic(self):
+        summary = summarize_records(
+            "mmstar",
+            [
+                {
+                    "correct": False,
+                    "parsed_answer": "",
+                    "category": "c1",
+                    "l2_category": "l1",
+                    "diagnostic_choice": "B",
+                    "diagnostic_correct": True,
+                }
+            ],
+            mode="multimodal_with_forced_choice",
+            evaluation_config={},
+        )
+
+        self.assertEqual(summary["official_accuracy"], 0.0)
+        self.assertEqual(summary["forced_choice_diagnostic"]["accuracy"], 1.0)
+
+    def test_mme_summary_uses_accuracy_plus_paired_image_accuracy(self):
+        summary = summarize_records(
+            "mme",
+            [
+                {"question_id": "img1", "category": "existence", "correct": True},
+                {"question_id": "img1", "category": "existence", "correct": True},
+                {"question_id": "img2", "category": "existence", "correct": True},
+                {"question_id": "img2", "category": "existence", "correct": False},
+            ],
+            mode="multimodal",
+            evaluation_config={},
+        )
+
+        existence = summary["category"][0]
+        self.assertEqual(existence["accuracy"], 75.0)
+        self.assertEqual(existence["accuracy_plus"], 50.0)
+        self.assertEqual(existence["score"], 125.0)
+        self.assertEqual(summary["total_score"], 125.0)
+
+    def test_pope_summary_reports_binary_classification_metrics(self):
+        summary = summarize_records(
+            "pope",
+            [
+                {"answer": "yes", "parsed_answer": "yes", "category": "random"},
+                {"answer": "yes", "parsed_answer": "no", "category": "random"},
+                {"answer": "no", "parsed_answer": "yes", "category": "random"},
+                {"answer": "no", "parsed_answer": "no", "category": "random"},
+            ],
+            mode="multimodal",
+            evaluation_config={},
+        )
+
+        self.assertEqual(summary["overall"]["accuracy"], 0.5)
+        self.assertEqual(summary["overall"]["precision"], 0.5)
+        self.assertEqual(summary["overall"]["recall"], 0.5)
+        self.assertEqual(summary["overall"]["f1"], 0.5)
+        self.assertEqual(summary["overall"]["yes_ratio"], 0.5)
 
 
 if __name__ == "__main__":
