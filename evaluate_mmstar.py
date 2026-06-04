@@ -108,10 +108,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=32,
+        default=8,
         help=(
             "Maximum number of generated tokens for each question. "
-            "Use 32 for normal evaluation."
+            "Use 8 for faster evaluation."
         ),
     )
 
