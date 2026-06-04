@@ -277,6 +277,19 @@ class SwanLabLogger:
             self.run.finish()
 
 
+def _log_step_metrics(logger, metrics, *, step, validation=None):
+    combined_metrics = dict(metrics)
+    if validation is not None:
+        combined_metrics.update(
+            {
+                "val/loss": validation["loss"],
+                "val/skipped": sum(validation["skipped"].values()),
+                **_skipped_metrics("val", validation["skipped"]),
+            }
+        )
+    logger.log(combined_metrics, step=step)
+
+
 def _move_batch(batch, device):
     return {
         "input_ids": batch["input_ids"].to(device),
@@ -510,9 +523,8 @@ def run_training(args, *, stage: str):
                         tok_s=f"{metrics['train/tokens_per_second']:.1f}",
                         skipped=sum(skipped.values()),
                     )
-                logger.log(metrics, step=global_step)
-
                 is_best = False
+                validation = None
                 if global_step % args.eval_interval == 0:
                     validation = evaluate(
                         model,
@@ -521,16 +533,15 @@ def run_training(args, *, stage: str):
                         precision=precision,
                         max_batches=args.max_eval_batches,
                     )
-                    logger.log(
-                        {
-                            "val/loss": validation["loss"],
-                            "val/skipped": sum(validation["skipped"].values()),
-                            **_skipped_metrics("val", validation["skipped"]),
-                        },
-                        step=global_step,
-                    )
                     is_best = validation["loss"] < best_val_loss
                     best_val_loss = min(best_val_loss, validation["loss"])
+
+                _log_step_metrics(
+                    logger,
+                    metrics,
+                    validation=validation,
+                    step=global_step,
+                )
 
                 if is_best or global_step % args.checkpoint_interval == 0:
                     checkpoint_manager.save(

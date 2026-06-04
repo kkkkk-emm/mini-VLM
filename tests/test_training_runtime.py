@@ -8,6 +8,7 @@ import sys
 import torch
 import torch.nn as nn
 
+import training.trainer as trainer_module
 from models.config import VLMConfig
 from models.language_model import LanguageModel
 from training.trainer import (
@@ -201,6 +202,35 @@ class TrainingRuntimeTests(unittest.TestCase):
             logger.finish()
 
         self.assertEqual(recorded, [({"train/loss": 1.0}, 3), "finished"])
+
+    def test_swanlab_logs_train_and_validation_metrics_in_one_call(self):
+        log_step_metrics = getattr(trainer_module, "_log_step_metrics", None)
+        self.assertIsNotNone(log_step_metrics)
+        recorded = []
+        logger = SimpleNamespace(
+            log=lambda metrics, step: recorded.append((metrics, step)),
+        )
+
+        log_step_metrics(
+            logger,
+            {"train/loss": 1.0},
+            validation={"loss": 1.25, "skipped": {"overlength": 2}},
+            step=1200,
+        )
+
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(
+            recorded[0],
+            (
+                {
+                    "train/loss": 1.0,
+                    "val/loss": 1.25,
+                    "val/skipped": 2,
+                    "val/skipped/overlength": 2,
+                },
+                1200,
+            ),
+        )
 
 
 if __name__ == "__main__":
