@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 import training.trainer as trainer_module
+from generate import parse_args as parse_generate_args
 from models.config import VLMConfig
 from models.language_model import LanguageModel
 from training.trainer import (
@@ -231,6 +232,33 @@ class TrainingRuntimeTests(unittest.TestCase):
                 1200,
             ),
         )
+
+
+class GenerateCliTests(unittest.TestCase):
+    def test_defaults_match_current_project_layout(self):
+        args = parse_generate_args([])
+
+        self.assertIsNone(args.checkpoint)
+        self.assertEqual(args.hf_model, VLMConfig().hf_repo_name)
+        self.assertTrue(Path(args.image).is_file())
+        self.assertEqual(args.generations, 5)
+
+    def test_accepts_hyphenated_generation_options(self):
+        args = parse_generate_args([
+            "--checkpoint",
+            "checkpoints/pretrain/best",
+            "--max-new-tokens",
+            "16",
+            "--measure-vram",
+        ])
+
+        self.assertEqual(args.checkpoint, "checkpoints/pretrain/best")
+        self.assertEqual(args.max_new_tokens, 16)
+        self.assertTrue(args.measure_vram)
+
+    def test_rejects_non_positive_generation_counts(self):
+        with self.assertRaises(SystemExit):
+            parse_generate_args(["--generations", "0"])
 
 
 if __name__ == "__main__":

@@ -13,23 +13,80 @@ from data.processors import get_image_processor, get_image_string, get_tokenizer
 from models.vision_language_model import VisionLanguageModel
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", type=str, default=None, 
-                        help="Path to the model checkpoint")
-    parser.add_argument("--hf_model", type=str, default="lusxvr/nanoVLM-230M-8k", 
-                        help="Path to the Hugging Face model")
-    parser.add_argument("--image", type=str, default="assets/image.png", 
-                        help="Path to the input image")
-    parser.add_argument("--prompt", type=str, default="What is in the image?", 
-                        help="The prompt for image generation")
-    parser.add_argument("--generations", type=int, default=5, 
-                        help="Number of output texts to generate")
-    parser.add_argument("--max_new_tokens", type=int, default=300, 
-                        help="Maximum number of new tokens to generate")
-    parser.add_argument("--measure_vram", action="store_true", 
-                        help="Measure VRAM usage")
-    return parser.parse_args()
+def parse_args(argv=None):
+    from pathlib import Path
+
+    from models.config import VLMConfig
+
+    defaults = VLMConfig()
+    default_image = Path("data/eval_images/image-01-golden-dog-balloons.jpg")
+
+    parser = argparse.ArgumentParser(description="Run mini-VLM image-to-text generation")
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Complete trained VLM checkpoint directory containing config.json and model.safetensors.",
+    )
+    source_group.add_argument(
+        "--hf-model",
+        "--hf_model",
+        dest="hf_model",
+        type=str,
+        default=defaults.hf_repo_name,
+        help="Hugging Face model repo or local exported VLM directory.",
+    )
+    parser.add_argument(
+        "--image",
+        type=str,
+        default=str(default_image),
+        help="Path to the input image.",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="What is in the image?",
+        help="The prompt for image generation.",
+    )
+    parser.add_argument(
+        "--generations",
+        type=int,
+        default=5,
+        help="Number of output texts to generate.",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        "--max_new_tokens",
+        dest="max_new_tokens",
+        type=int,
+        default=300,
+        help="Maximum number of new tokens to generate.",
+    )
+    parser.add_argument("--top-k", "--top_k", dest="top_k", type=int, default=50)
+    parser.add_argument("--top-p", "--top_p", dest="top_p", type=float, default=0.9)
+    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--greedy", action="store_true", help="Use greedy decoding instead of sampling.")
+    parser.add_argument(
+        "--measure-vram",
+        "--measure_vram",
+        dest="measure_vram",
+        action="store_true",
+        help="Measure CUDA VRAM usage.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.generations <= 0:
+        parser.error("--generations must be positive")
+    if args.max_new_tokens <= 0:
+        parser.error("--max-new-tokens must be positive")
+    if args.top_k < 0:
+        parser.error("--top-k must be non-negative")
+    if not 0.0 < args.top_p <= 1.0:
+        parser.error("--top-p must be in the range (0, 1]")
+    if args.temperature <= 0:
+        parser.error("--temperature must be positive")
+    return args
 
 
 def main():
@@ -74,7 +131,15 @@ def main():
     img_t = processed_image.to(device) # [N_num, 3, P, P]
     print("\ninput: ", {args.prompt}, "\n output: ")
     for i in range(args.generations):
-        gen = model.generate(tokens, img_t, max_new_tokens=args.max_new_tokens) # [1, L]
+        gen = model.generate(
+            tokens,
+            img_t,
+            max_new_tokens=args.max_new_tokens,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            greedy=args.greedy,
+        ) # [1, L]
         out = tokenizer.batch_decode(gen, skip_special_tokens=True)[0]
         if args.measure_vram and torch.cuda.is_available():
             torch.cuda.synchronize()
