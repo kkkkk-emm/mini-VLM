@@ -101,7 +101,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument(
         "--prompt-style",
-        choices=("strict", "original"),
+        choices=("strict", "original", "none"),
         default="strict",
     )
     parser.add_argument(
@@ -201,6 +201,8 @@ def build_prompt(benchmark: str, question: str, prompt_style: str) -> str:
                 "\nDo not provide an explanation."
                 "\nAnswer:"
             )
+        elif prompt_style == "none":
+            suffix = ""
         else:
             suffix = "\nAnswer with only the option letter: A, B, C, or D."
     else:
@@ -210,6 +212,8 @@ def build_prompt(benchmark: str, question: str, prompt_style: str) -> str:
                 "\nDo not provide an explanation."
                 "\nAnswer:"
             )
+        elif prompt_style == "none":
+            suffix = ""
         else:
             suffix = "\nPlease answer yes or no."
     return question + suffix
