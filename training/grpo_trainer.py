@@ -102,6 +102,7 @@ def _sample_group(model, batch, args):
         temperature=args.temperature,
         greedy=False,
     )
+    generated_ids = generated_ids.clone() # 将 inference tensor 转换为普通 tensor。
     _set_grpo_module_modes(model, decoder_training=True)
 
     completions = model.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
