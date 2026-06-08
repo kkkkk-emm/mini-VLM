@@ -21,6 +21,11 @@ from data.processors import get_tokenizer
 from safetensors.torch import load_model
 
 class VisionLanguageModel(nn.Module):
+    """视觉-语言模型主类，整合视觉编码器、模态投影器与解码器语言模型。
+
+    该类封装了将图像特征注入到语言模型的流程，并提供 `forward` 与
+    `generate` 两种接口：前者用于带标签的训练，后者用于自回归推理/生成。
+    """
     def __init__(self, cfg: VLMConfig, tokenizer_path: Optional[str] = None):
         super().__init__()
         self.cfg = cfg
@@ -32,6 +37,11 @@ class VisionLanguageModel(nn.Module):
         self.projector = ModalityProjector(cfg)
 
     def _process_images(self, images, device):
+        """规范化并将输入的 image 数据转换为单个张量，移动到 `device`。
+
+        支持的输入形式包括单张/多张 PIL.Image、bytes、或已经拼接的张量列表。
+        若 images 为空或处理后为空，则返回 None。
+        """
         if isinstance(images, list):
             if images and isinstance(images[0], list):
                 images = [img for sublist in images for img in sublist]
@@ -43,8 +53,15 @@ class VisionLanguageModel(nn.Module):
         return images
 
     def _replace_img_tokens_with_embd(self, input_ids, token_embd, img_embds):
-        """
-        将token_embd中的图像token替换为对应的图像embedding
+        """将序列中占位的图像 token embedding 替换为视觉特征投影后的向量。
+
+        参数:
+            input_ids: LongTensor，输入 id 序列。
+            token_embd: FloatTensor，初始的 token embedding 张量。
+            img_embds: FloatTensor，经视觉编码与 projector 得到的图像 embedding。
+
+        返回:
+            替换后新的 token embedding 张量。
         """
         update_token_embd = token_embd.clone()
         mask = (input_ids == self.tokenizer.image_token_id)
@@ -52,6 +69,18 @@ class VisionLanguageModel(nn.Module):
         return update_token_embd
 
     def forward(self, input_ids, images, attention_mask=None, target_ids=None):
+        """模型前向计算：将图像特征注入 token embedding 并计算 logits（可选返回 loss）。
+
+        参数:
+            input_ids: LongTensor，输入 token id，形状 [B, T]
+            images: 图像或图像列表，支持多种格式（见 `_process_images`）。
+            attention_mask: 可选的 attention mask。
+            target_ids: 可选的标签 id，用于计算交叉熵 loss（训练时使用）。
+
+        返回:
+            logits: FloatTensor，形状 [B, T, V]
+            loss: Optional[Tensor]，当 `target_ids` 提供时返回交叉熵 loss 与 router aux loss 之和。
+        """
         images_tensors = self._process_images(images, input_ids.device)
         token_embd = self.decoder.token_embedding(input_ids)
         if images_tensors is not None:
@@ -69,9 +98,18 @@ class VisionLanguageModel(nn.Module):
 
     @torch.inference_mode()
     def generate(self, input_ids, images, attention_mask=None, max_new_tokens=5, top_k=50, top_p=0.9, temperature=0.5, greedy=False):
-        """
-        input_ids: [batch_size, seq_len]
-        images: [B, 3, height, width]
+        """自回归生成接口。
+
+        参数:
+            input_ids: LongTensor，输入 prompt 的 token id，形状 [B, T_prefill]
+            images: 图像张量或列表，会被 `_process_images` 规范化。
+            attention_mask: 可选的 attention mask。
+            max_new_tokens: int，要生成的最大 token 数。
+            top_k, top_p, temperature: 采样参数。
+            greedy: bool，是否使用贪心解码（True 则忽略采样参数）。
+
+        返回:
+            生成的 token id 张量，形状 [B, T_gen]（若没有生成则返回空张量）。
         """
 
         # 处理图像
@@ -168,8 +206,14 @@ class VisionLanguageModel(nn.Module):
     def from_pretrained(
         cls, repo: str, *, revison: Optional[str] = None
     ):
-        """
-        加载模型
+        """从本地目录或 HuggingFace Hub 加载预训练模型与 tokenizer。
+
+        参数:
+            repo: 本地路径或 HF 仓库 id。
+            revison: 可选的 HF 版本/commit/分支。
+
+        返回:
+            已加载的 `VisionLanguageModel` 实例（权重已加载）。
         """
         # 加载本地模型
         if os.path.exists(repo):
@@ -200,6 +244,14 @@ class VisionLanguageModel(nn.Module):
 
     @classmethod
     def from_hf_backbones(cls, cfg: VLMConfig):
+        """基于 HuggingFace backbone 配置构建模型实例，并可选择加载骨干权重。
+
+        参数:
+            cfg: `VLMConfig` 实例。
+
+        返回:
+            构建好的 `VisionLanguageModel` 实例。
+        """
         model = cls(cfg)
         if cfg.vlm_load_backbone_weights:
             load_hf_backbones(model)

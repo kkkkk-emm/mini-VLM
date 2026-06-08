@@ -52,6 +52,19 @@ def benchmark_task_type(benchmark: str) -> str:
 
 
 def resolve_grpo_dataset_files(benchmark: str, source: str | None) -> list[str]:
+    """解析并返回用于 GRPO 的 parquet 数据文件列表。
+
+    参数:
+        benchmark: str，基准名称，必须在 `GRPO_BENCHMARKS` 中。
+        source: 可选的路径模式或文件/目录。
+
+    返回:
+        符合条件的文件路径列表（字符串形式）。
+
+    抛出:
+        ValueError: 当 benchmark 不受支持时。
+        FileNotFoundError: 当没有找到任何匹配文件时。
+    """
     if benchmark not in GRPO_BENCHMARKS:
         raise ValueError(f"Unsupported GRPO benchmark: {benchmark}")
     source = source or DEFAULT_GRPO_SOURCES[benchmark]
@@ -92,6 +105,17 @@ class GRPOSampleProcessor:
     benchmark: str
 
     def process(self, row: dict[str, Any]):
+        """将原始数据行转换为模型所需的样本字典或返回 `SkippedSample`。
+
+        处理流程包括：提取文本、解析与加载图像、调用 `image_processor`，构造 prompt 并
+        使用 tokenizer 进行编码，最终生成包含 `input_ids`、`attention_mask`、`images` 等字段的字典。
+
+        参数:
+            row: 原始数据行字典（来自 parquet 或 streaming 数据集）。
+
+        返回:
+            成功时返回包含模型输入的字典，失败时返回 `SkippedSample` 实例，携带跳过原因。
+        """
         question = row.get("question")
         answer = row.get("answer")
         if not isinstance(question, str) or answer is None:
@@ -169,6 +193,16 @@ class _ProcessedGRPOIterableDataset(IterableDataset):
 
 class GRPODataCollator:
     def __call__(self, samples):
+        """collate 函数：聚合样本，统计被跳过的样本计数并保证只返回单个有效样本。
+
+        GRPO 第一版要求 `prompt_batch_size==1`，因此当有多个有效样本时抛出错误。
+
+        参数:
+            samples: 来自 dataset 的样本列表，可能包含 `SkippedSample`。
+
+        返回:
+            字典，包含 `input_ids`、`attention_mask`、`images`、`empty` 与 `skipped_counts`。
+        """
         skipped = {}
         valid = []
         for sample in samples:
@@ -190,6 +224,16 @@ class GRPODataCollator:
 
 
 def build_grpo_data_loader(args, model, *, shuffle_seed: int):
+    """构建并返回用于 GRPO 训练的数据加载器以及所用的文件列表。
+
+    参数:
+        args: 解析后的运行参数（包含 benchmark、dataset_source、stream_dataset 等）。
+        model: 已加载的 `VisionLanguageModel`，用于提供 tokenizer 与 cfg。
+        shuffle_seed: int，用于数据随机化的一致性种子。
+
+    返回:
+        (DataLoader, files) 二元组：DataLoader 为训练迭代器，files 为数据源文件列表。
+    """
     from datasets import load_dataset
     from torch.utils.data import DataLoader
 

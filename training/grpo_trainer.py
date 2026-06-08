@@ -35,6 +35,15 @@ from training.trainer import (
 
 
 def _validate_grpo_args(args):
+    """验证 GRPO 训练所需的命令行参数并在不合法时抛出异常。
+
+    参数:
+        args: argparse.Namespace，包含训练运行时的所有参数。
+
+    该函数会检查参数范围、互斥性以及给定路径是否存在，并在发现问题时
+    抛出 `ValueError` 或 `FileNotFoundError`。
+    """
+    # 参数合法性检查
     if args.prompt_batch_size != 1:
         raise ValueError("GRPO first version requires --prompt-batch-size 1")
     if args.num_generations < 2:
@@ -64,12 +73,33 @@ def _validate_grpo_args(args):
 
 
 def _set_grpo_module_modes(model, *, decoder_training: bool):
+    """设置模型各子模块的训练/推理模式。
+
+    规则：视觉编码器与 projector 固定为评估模式（不更新），
+    decoder 根据 `decoder_training` 参数决定是否进入训练模式。
+
+    参数:
+        model: VisionLanguageModel 实例。
+        decoder_training: bool，是否将 decoder 设为训练模式。
+    """
     model.vision_encoder.eval()
     model.projector.eval()
     model.decoder.train(decoder_training)
 
 
 def _move_grpo_batch(batch, device):
+    """将数据批次移动到指定设备（CPU/GPU）。
+
+    仅会将 `input_ids`、`attention_mask` 和 `images`（若存在）迁移到目标设备，
+    其余字段保持不变并原样返回。
+
+    参数:
+        batch: 包含张量与元数据的字典。
+        device: torch.device 目标设备。
+
+    返回:
+        一个新的 batch 字典，其中上述字段已移动到 `device`。
+    """
     return {
         **batch,
         "input_ids": batch["input_ids"].to(device),
@@ -79,6 +109,18 @@ def _move_grpo_batch(batch, device):
 
 
 def _repeat_images(images, repeats: int):
+    """重复图像张量以匹配生成样本数（用于同一 prompt 的多次采样）。
+
+    参数:
+        images: 图像张量，形状应为 [N, C, H, W] 或者为 None。
+        repeats: int，沿第 0 维重复的次数（通常为 `num_generations`）。
+
+    返回:
+        重复后的图像张量或 None（当输入为 None 时）。
+
+    抛出:
+        ValueError: 当输入张量维度不为 4 时。
+    """
     if images is None:
         return None
     if images.ndim != 4:
@@ -87,6 +129,26 @@ def _repeat_images(images, repeats: int):
 
 
 def _sample_group(model, batch, args):
+    """对单个 prompt 进行多次自回归采样，返回生成结果与奖励。
+
+    流程：
+    1. 将 prompt 和 attention mask 在 batch 维度重复 `num_generations` 次；
+    2. 将图像按相同次数重复（若存在）；
+    3. 以评估模式（decoder 禁用梯度）调用 `model.generate` 多次采样；
+    4. 解码生成文本并用规则奖励函数打分，返回生成 ids、解码文本、打分详情、奖励张量与重复后的 images。
+
+    参数:
+        model: VisionLanguageModel 实例（包含 tokenizer 与 generate 方法）。
+        batch: 单个训练样本的字典。
+        args: 解析后的训练运行参数。
+
+    返回:
+        generated_ids: Tensor，生成的 token id，形状为 [num_generations, seq_len]
+        completions: List[str]，解码后的文本完成项。
+        reward_results: List[RuleRewardResult]，每个完成项的打分与解析信息。
+        rewards: Tensor，形状为 [num_generations] 的奖励值。
+        images: 重复后的图像张量或 None。
+    """
     prompt_ids = batch["input_ids"].repeat(args.num_generations, 1)
     attention_mask = batch["attention_mask"].repeat(args.num_generations, 1)
     images = _repeat_images(batch["images"], args.num_generations)
@@ -132,6 +194,26 @@ def _sample_group(model, batch, args):
 
 
 def _compute_grpo_loss(model, batch, generated_ids, images, advantages):
+    """计算 GRPO 损失：基于生成序列的对数概率与群体优势值（advantages）。
+
+    步骤：
+    1. 将 prompt 重复以与生成序列对齐，构造完整输入（prompt + completion）；
+    2. 使用模型前向得到 logits；
+    3. 收集 completion 部分的 token 级 log-prob，并合成序列级 log-prob；
+    4. 计算 loss = - mean(advantages * seq_log_probs)，用于策略梯度更新。
+
+    参数:
+        model: VisionLanguageModel 实例。
+        batch: 原始 batch（用于提取 prompt）。
+        generated_ids: Tensor，生成的 completion token ids，形状 [G, L]
+        images: 重复后的 images 张量或 None。
+        advantages: Tensor，与生成数一致的优势值向量，形状 [G]
+
+    返回:
+        loss: 标量 Tensor，可用于反向传播。
+        completion_mask: Tensor，标识 completion token 的 mask。
+        seq_log_probs.detach(): Tensor，序列级 log-prob（已 detach，用于记录）。
+    """
     prompt_ids = batch["input_ids"].repeat(generated_ids.size(0), 1)
     prompt_attention_mask = batch["attention_mask"].repeat(generated_ids.size(0), 1)
     completion_mask = build_completion_mask(
@@ -160,12 +242,21 @@ def _compute_grpo_loss(model, batch, generated_ids, images, advantages):
 
 
 def _format_reward_debug(reward_results):
+    """为调试打印格式化 reward 结果，返回解析答案与正确性简要字符串。"""
     parsed = [result.parsed_answer or "<unparsed>" for result in reward_results]
     correctness = ["1" if result.is_correct else "0" for result in reward_results]
     return f"parsed={parsed}, correct={correctness}"
 
 
 def run_grpo_training(args):
+    """GRPO 训练主流程。
+
+    主要功能：参数校验、随机种子设定、模型加载与参数配置、优化器/调度器构建、数据加载、
+    以及训练循环（包括多次采样、奖励计算、优势估计、策略梯度更新与检查点保存）。
+
+    参数:
+        args: argparse.Namespace，包含所有训练相关参数（见 `build_parser`）。
+    """
     _validate_grpo_args(args)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -368,6 +459,11 @@ def run_grpo_training(args):
 
 
 def build_parser():
+    """构建并返回命令行参数解析器。
+
+    返回:
+        argparse.ArgumentParser 已配置好 GRPO 训练所需的参数及默认值。
+    """
     defaults = RuleRewardConfig()
     parser = argparse.ArgumentParser(description="mini-VLM rule-reward GRPO training")
     parser.add_argument("--checkpoint", default=None, help="SFT checkpoint directory")

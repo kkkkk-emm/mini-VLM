@@ -23,6 +23,10 @@ _YES_NO_EXPLICIT_RE = re.compile(
 
 @dataclass(frozen=True)
 class RuleRewardConfig:
+    """规则奖励配置：控制不同答案类型与格式对最终 reward 的影响。
+
+    字段说明见属性注释。
+    """
     correct_reward: float = 1.0
     incorrect_reward: float = -1.0
     unparseable_reward: float = -0.5
@@ -145,6 +149,20 @@ def score_rule_reward(
     task_type: str,
     config: RuleRewardConfig | None = None,
 ) -> RuleRewardResult:
+    """根据规则对单个生成完成项打分并返回结构化的结果。
+
+    规则包括：解析生成答案（多选或是/否），判断是否正确，
+    对简洁格式给出 bonus，并对冗长回答给予惩罚。返回包含解析信息与最终 reward 的 `RuleRewardResult`。
+
+    参数:
+        completion: 模型生成的文本。
+        answer: 参考答案文本。
+        task_type: 任务类型，例如 'multiple_choice' 或 'yes_no'。
+        config: 可选的 `RuleRewardConfig`，不提供时使用默认值。
+
+    返回:
+        `RuleRewardResult`，包含 reward、解析后的答案与元信息。
+    """
     config = config or RuleRewardConfig()
     parsed_answer = normalize_completion_answer(completion, task_type)
     normalized_answer = normalize_reference_answer(answer, task_type)

@@ -31,6 +31,11 @@ class Precision:
 
 
 def resolve_precision(requested: str, *, device: torch.device) -> Precision:
+    """解析并返回数值精度配置。
+
+    当 `requested` 为 "auto" 时，会根据设备能力（CUDA 是否支持 bfloat16）选择合适精度。
+    返回 `Precision`，包含名字、对应的 torch.dtype 以及是否使用 grad scaler。
+    """
     if requested == "auto":
         if device.type == "cuda":
             requested = "bf16" if torch.cuda.is_bf16_supported() else "fp16"
@@ -46,6 +51,7 @@ def resolve_precision(requested: str, *, device: torch.device) -> Precision:
 
 
 def select_device() -> torch.device:
+    """选择可用设备，优先 CUDA，其次 MPS，最后 CPU。"""
     if torch.cuda.is_available():
         return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -54,7 +60,16 @@ def select_device() -> torch.device:
 
 
 def configure_trainable_parameters(model, stage: str):
-    """基于训练阶段配置可训练参数"""
+    """基于训练阶段配置模型中哪些参数需要参与优化。
+
+    - 'pretrain': 通常解冻 projector 与 MoE/MLP（若配置使用 MoE），用于大规模预训练。
+    - 'sft': 解冻 projector 与 decoder，用于监督微调。
+    - 'grpo': 仅解冻 decoder，用于策略梯度基于生成结果的优化。
+
+    参数:
+        model: 要修改的模型实例。
+        stage: 训练阶段标识字符串。
+    """
     if stage not in {"pretrain", "sft", "grpo"}:
         raise ValueError("stage must be one of: pretrain, sft, grpo")
     for parameter in model.parameters():
@@ -101,6 +116,10 @@ def parameter_trainability_report(model):
 
 
 def print_trainability_report(model):
+    """打印模型参数可训练性报告并返回该报告字典。
+
+    该报告包含参数总数、可训练参数数目以及各主要子模块是否被冻结等信息。
+    """
     report = parameter_trainability_report(model)
     print("Parameter trainability:")
     print(f"  total parameters: {report['total_parameters']:,}")
@@ -130,6 +149,10 @@ def validate_training_args(args):
 
 
 def _skipped_metrics(prefix, skipped):
+    """将 `skipped` 统计字典转换为带前缀的 metrics 字典，便于日志记录。
+
+    例如传入 prefix='train' 将产生键 'train/skipped/<reason>'。
+    """
     return {
         f"{prefix}/skipped/{reason}": count
         for reason, count in skipped.items()
@@ -147,6 +170,7 @@ def _config_dict(config):
 
 
 class CheckpointManager:
+    """检查点管理器：负责保存模型、tokenizer 以及训练状态，并清理旧检查点。"""
     def __init__(self, output_dir: Path, *, keep_latest: int = 3):
         self.output_dir = Path(output_dir)
         self.keep_latest = keep_latest
@@ -249,6 +273,14 @@ class CheckpointManager:
 
 
 def read_training_state(checkpoint: str):
+    """从指定检查点目录加载训练状态文件 `training_state.pt` 并返回其内容。
+
+    参数:
+        checkpoint: 检查点目录路径字符串。
+
+    返回:
+        已加载的训练状态字典（用于恢复训练）。
+    """
     return torch.load(
         Path(checkpoint) / "training_state.pt",
         map_location="cpu",
@@ -257,6 +289,17 @@ def read_training_state(checkpoint: str):
 
 
 def restore_training_state(checkpoint, *, optimizer, scheduler, scaler):
+    """恢复检查点中的优化器、调度器和 scaler 状态。
+
+    参数:
+        checkpoint: 检查点目录路径。
+        optimizer: 优化器实例，会调用 `load_state_dict` 恢复状态。
+        scheduler: 可选的学习率调度器实例。
+        scaler: AMP scaler（可选）。
+
+    返回:
+        加载的完整训练状态字典。
+    """
     state = read_training_state(checkpoint)
     optimizer.load_state_dict(state["optimizer"])
     if scheduler is not None and state["scheduler"] is not None:
@@ -267,6 +310,11 @@ def restore_training_state(checkpoint, *, optimizer, scheduler, scaler):
 
 
 def build_optimizer(model, cfg: TrainConfig):
+    """根据模型中各子模块是否可训练及给定学习率构建 AdamW 优化器。
+
+    会为 projector、decoder 与 vision_encoder（若对应参数可训练）分别创建参数组。
+    返回 `torch.optim.AdamW` 实例。
+    """
     groups = []
     for module, learning_rate in (
         (model.projector, cfg.lr_mp),
@@ -280,6 +328,7 @@ def build_optimizer(model, cfg: TrainConfig):
 
 
 def build_scheduler(optimizer, *, max_steps: int, warmup_ratio: float):
+    """构建学习率调度器：线性 warmup + cosine decay（使用 LambdaLR）。"""
     warmup_steps = int(max_steps * warmup_ratio)
 
     def lr_lambda(step):
@@ -293,6 +342,10 @@ def build_scheduler(optimizer, *, max_steps: int, warmup_ratio: float):
 
 class SwanLabLogger:
     def __init__(self, *, enabled, project, workspace, mode, stage, config):
+        """封装 swanlab 的简单日志接口。
+
+        当 `enabled` 为 True 时尝试导入并初始化 `swanlab`，否则成为空实现。
+        """
         self.enabled = enabled
         self.run = None
         if not enabled:
@@ -342,6 +395,10 @@ def _move_batch(batch, device):
 
 
 def _autocast_context(device, precision):
+    """根据 precision 返回合适的自动混合精度上下文管理器。
+
+    当使用 fp32 时返回空上下文（不启用 autocast），否则返回 `torch.autocast`。
+    """
     if precision.name == "fp32":
         return nullcontext()
     return torch.autocast(device_type=device.type, dtype=precision.dtype)
