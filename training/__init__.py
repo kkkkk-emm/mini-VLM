@@ -1,1 +1,1 @@
-"""Training utilities for pretraining and supervised fine-tuning."""
+"""Training utilities for pretraining, SFT, and rule-reward GRPO."""

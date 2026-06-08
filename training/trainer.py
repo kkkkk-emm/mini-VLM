@@ -55,10 +55,14 @@ def select_device() -> torch.device:
 
 def configure_trainable_parameters(model, stage: str):
     """基于训练阶段配置可训练参数"""
-    if stage not in {"pretrain", "sft"}:
-        raise ValueError("stage must be either 'pretrain' or 'sft'")
+    if stage not in {"pretrain", "sft", "grpo"}:
+        raise ValueError("stage must be one of: pretrain, sft, grpo")
     for parameter in model.parameters():
         parameter.requires_grad = False
+    if stage == "grpo":
+        for parameter in model.decoder.parameters():
+            parameter.requires_grad = True
+        return
     for parameter in model.projector.parameters():
         parameter.requires_grad = True
     if stage == "sft":
@@ -68,6 +72,44 @@ def configure_trainable_parameters(model, stage: str):
         for block in model.decoder.blocks:
             for parameter in block.mlp.parameters():
                 parameter.requires_grad = True
+
+
+def parameter_trainability_report(model):
+    total_parameters = sum(parameter.numel() for parameter in model.parameters())
+    trainable_parameters = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
+    trainable_percentage = (
+        100.0 * trainable_parameters / total_parameters if total_parameters else 0.0
+    )
+
+    def module_frozen(module):
+        parameters = list(module.parameters())
+        return bool(parameters) and all(not parameter.requires_grad for parameter in parameters)
+
+    def module_trainable(module):
+        return any(parameter.requires_grad for parameter in module.parameters())
+
+    return {
+        "total_parameters": total_parameters,
+        "trainable_parameters": trainable_parameters,
+        "trainable_percentage": trainable_percentage,
+        "vision_encoder_frozen": module_frozen(model.vision_encoder),
+        "projector_frozen": module_frozen(model.projector),
+        "decoder_trainable": module_trainable(model.decoder),
+    }
+
+
+def print_trainability_report(model):
+    report = parameter_trainability_report(model)
+    print("Parameter trainability:")
+    print(f"  total parameters: {report['total_parameters']:,}")
+    print(f"  trainable parameters: {report['trainable_parameters']:,}")
+    print(f"  trainable percentage: {report['trainable_percentage']:.4f}%")
+    print(f"  vision encoder frozen: {report['vision_encoder_frozen']}")
+    print(f"  projector frozen: {report['projector_frozen']}")
+    print(f"  decoder trainable: {report['decoder_trainable']}")
+    return report
 
 
 def require_sft_source(*, checkpoint: Optional[str], resume: Optional[str]):

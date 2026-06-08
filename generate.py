@@ -1,7 +1,4 @@
 import argparse
-from email import message
-from email.mime import image
-from opcode import hasarg
 from PIL import Image
 import torch
 

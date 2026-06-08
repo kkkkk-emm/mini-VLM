@@ -5,7 +5,10 @@ google
 HuggingFaceTB
 checkpoints
 swanlog
-tests
+tests/*
+!tests/test_generate_eos.py
+!tests/test_grpo_rewards.py
+!tests/test_grpo_utils.py
 results
 POPE
 MME

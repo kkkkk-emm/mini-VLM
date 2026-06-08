@@ -101,6 +101,11 @@ class VisionLanguageModel(nn.Module):
             currrent_logits = last_token_from_prefill
         
         generated_token_list = [] # 新生成的token ids, [[B, 1]]
+        eos_token_id = self.tokenizer.eos_token_id
+        pad_token_id = self.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = eos_token_id
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=input_ids.device)
         for _ in range(max_new_tokens):
             if greedy:
                 generated_token = currrent_logits.argmax(dim=-1, keepdim=True)
@@ -108,7 +113,19 @@ class VisionLanguageModel(nn.Module):
                 flitered_logits = top_k_top_p_filtering(currrent_logits, top_k=top_k, top_p=top_p)
                 generated_token = torch.multinomial(F.softmax(flitered_logits / temperature, dim=-1), num_samples=1)
             
+            if eos_token_id is not None:
+                if finished.any() and pad_token_id is not None:
+                    generated_token = torch.where(
+                        finished.unsqueeze(1),
+                        torch.full_like(generated_token, pad_token_id),
+                        generated_token,
+                    )
+                finished = finished | (generated_token.squeeze(1) == eos_token_id)
+
             generated_token_list.append(generated_token)
+            if eos_token_id is not None and bool(finished.all()):
+                break
+
             generated_token_embd = self.decoder.token_embedding(generated_token)
             
             current_total_sel_len += 1
