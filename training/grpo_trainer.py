@@ -4,6 +4,7 @@ import argparse
 import random
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -32,6 +33,61 @@ from training.trainer import (
     restore_training_state,
     select_device,
 )
+
+
+@dataclass
+class SampledGroupStats:
+    sampled_groups: int = 0
+    zero_std_groups: int = 0
+    zero_std_all_correct: int = 0
+    zero_std_all_wrong: int = 0
+    zero_std_all_unparseable: int = 0
+    zero_std_other: int = 0
+    sampled_completions: int = 0
+    correct_completions: int = 0
+    parseable_completions: int = 0
+    yes_completions: int = 0
+    no_completions: int = 0
+
+    def update(self, reward_results, *, reward_std, zero_std: bool):
+        self.sampled_groups += 1
+        self.sampled_completions += len(reward_results)
+        self.correct_completions += sum(1 for result in reward_results if result.is_correct)
+        self.parseable_completions += sum(1 for result in reward_results if result.is_parseable)
+        self.yes_completions += sum(1 for result in reward_results if result.parsed_answer == "yes")
+        self.no_completions += sum(1 for result in reward_results if result.parsed_answer == "no")
+
+        if not zero_std:
+            return
+
+        self.zero_std_groups += 1
+        if reward_results and all(result.is_correct for result in reward_results):
+            self.zero_std_all_correct += 1
+        elif reward_results and all(result.is_parseable for result in reward_results) and not any(
+            result.is_correct for result in reward_results
+        ):
+            self.zero_std_all_wrong += 1
+        elif reward_results and not any(result.is_parseable for result in reward_results):
+            self.zero_std_all_unparseable += 1
+        else:
+            self.zero_std_other += 1
+
+    def metrics(self, *, prefix: str):
+        completion_count = max(self.sampled_completions, 1)
+        sampled_groups = max(self.sampled_groups, 1)
+        return {
+            f"{prefix}/sampled_groups": self.sampled_groups,
+            f"{prefix}/zero_std_groups": self.zero_std_groups,
+            f"{prefix}/zero_std_rate": self.zero_std_groups / sampled_groups,
+            f"{prefix}/zero_std_all_correct": self.zero_std_all_correct,
+            f"{prefix}/zero_std_all_wrong": self.zero_std_all_wrong,
+            f"{prefix}/zero_std_all_unparseable": self.zero_std_all_unparseable,
+            f"{prefix}/zero_std_other": self.zero_std_other,
+            f"{prefix}/correct_rate": self.correct_completions / completion_count,
+            f"{prefix}/parseable_rate": self.parseable_completions / completion_count,
+            f"{prefix}/yes_ratio": self.yes_completions / completion_count,
+            f"{prefix}/no_ratio": self.no_completions / completion_count,
+        }
 
 
 def _validate_grpo_args(args):
@@ -318,7 +374,7 @@ def run_grpo_training(args):
     )
 
     skipped = Counter()
-    zero_std_groups = 0
+    sampled_group_stats = SampledGroupStats()
     consecutive_zero_std_groups = 0
     accumulated_groups = 0
     accumulated_loss = 0.0
@@ -349,8 +405,12 @@ def run_grpo_training(args):
                     rewards,
                     eps=args.reward_std_eps,
                 )
+                sampled_group_stats.update(
+                    reward_results,
+                    reward_std=reward_std,
+                    zero_std=should_skip,
+                )
                 if should_skip:
-                    zero_std_groups += 1
                     consecutive_zero_std_groups += 1
                     if consecutive_zero_std_groups > args.zero_std_max_consecutive:
                         raise RuntimeError(
@@ -399,7 +459,7 @@ def run_grpo_training(args):
                     "train/reward_std_last_group": reward_std.detach().float().item(),
                     "train/lr": optimizer.param_groups[0]["lr"],
                     "train/grad_norm": float(grad_norm),
-                    "train/zero_std_groups": zero_std_groups,
+                    **sampled_group_stats.metrics(prefix="train"),
                     "train/skipped": sum(skipped.values()),
                     **_skipped_metrics("train", skipped),
                 }
@@ -413,7 +473,7 @@ def run_grpo_training(args):
                         reward=f"{reward_mean:.3f}",
                         std=f"{metrics['train/reward_std_last_group']:.3f}",
                         grad_norm=f"{float(grad_norm):.3f}",
-                        zero_std=zero_std_groups,
+                        zero_std=sampled_group_stats.zero_std_groups,
                     )
                     log_started_at = time.perf_counter()
                 logger.log(metrics, step=global_step)
