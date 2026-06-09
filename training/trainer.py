@@ -75,10 +75,11 @@ def configure_trainable_parameters(model, stage: str):
     for parameter in model.parameters():
         parameter.requires_grad = False
 
-    for parameter in model.projector.parameters():
-        parameter.requires_grad = True
-        
-    if stage == "sft" or stage == "grpo":
+    if stage in {"pretrain", "sft"}:
+        for parameter in model.projector.parameters():
+            parameter.requires_grad = True
+
+    if stage in {"sft", "grpo"}:
         for parameter in model.decoder.parameters():
             parameter.requires_grad = True
     elif model.cfg.lm_use_moe:
