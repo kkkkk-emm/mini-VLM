@@ -17,9 +17,9 @@ from data.processors import get_image_processor, get_image_string
 
 GRPO_BENCHMARKS = ("mmstar", "mme", "pope")
 DEFAULT_GRPO_SOURCES = {
-    "mmstar": "data/MMStar/mmstar.parquet",
-    "mme": "data/MME/data/*.parquet",
-    "pope": "data/POPE/data/*.parquet",
+    "mmstar": "your train data path",
+    "mme": "your train data path",
+    "pope": "your train data path",
 }
 
 
