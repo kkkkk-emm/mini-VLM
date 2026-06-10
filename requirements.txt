@@ -7,3 +7,4 @@ einops>=0.8.2
 Pillow>=10.0.0
 tqdm>=4.66.0
 swanlab>=0.7.16
+gradio>=5.0.0

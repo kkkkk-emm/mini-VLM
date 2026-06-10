@@ -8,6 +8,8 @@ swanlog
 tests/*
 !tests/test_generate_eos.py
 !tests/test_ai2d_grpo_builder.py
+!tests/test_chat_ui.py
+!tests/test_export_image_tiles.py
 !tests/test_grpo_rewards.py
 !tests/test_grpo_trainer_metrics.py
 !tests/test_grpo_utils.py
@@ -17,3 +19,4 @@ MME
 MMStar
 figures
 the_cauldron_parquet
+mini-vlm-final-report.md
