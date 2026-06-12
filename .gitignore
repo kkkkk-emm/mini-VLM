@@ -13,6 +13,8 @@ tests/*
 !tests/test_grpo_rewards.py
 !tests/test_grpo_trainer_metrics.py
 !tests/test_grpo_utils.py
+!tests/test_draw_report_figures.py
+!tests/test_measure_prompt_vram.py
 results
 POPE
 MME
