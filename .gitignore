@@ -15,6 +15,7 @@ tests/*
 !tests/test_grpo_utils.py
 !tests/test_draw_report_figures.py
 !tests/test_measure_prompt_vram.py
+!tests/test_extract_grpo_failure_cases.py
 results
 POPE
 MME
